@@ -1,0 +1,73 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid()) @map("_id")
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(TEAM_MEMBER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Event {
+  id          String   @id @default(cuid()) @map("_id")
+  name        String
+  description String?
+  isPublished Boolean  @default(false)
+  createdById String
+  memberIds   String[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdById])
+  @@index([memberIds])
+}
+
+model Photo {
+  id           String   @id @default(cuid()) @map("_id")
+  eventId      String
+  uploadedById String
+  filename     String
+  originalName String
+  mimeType     String
+  size         Int
+  url          String
+  storageProvider String?
+  storageKey   String?
+  thumbnailUrl String?
+  width        Int?
+  height       Int?
+  selected     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([eventId])
+  @@index([uploadedById])
+  @@index([selected])
+  @@index([createdAt])
+}
+
+model Gallery {
+  id          String    @id @default(cuid()) @map("_id")
+  eventId     String    @unique
+  slug        String    @unique
+  pin         String?
+  pinHash     String?
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([createdAt])
+}
+
+enum Role {
+  ADMIN
+  TEAM_MEMBER
+}
