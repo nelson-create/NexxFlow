@@ -1,20 +1,17 @@
-import { createContext, useContext, useEffect, useState } from 'react';
-import axios from '../services/api';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { SESSION_EXPIRED_EVENT, TOKEN_KEY } from '../services/api';
+import { authApi } from '../services/gallery';
+import type { User } from '../lib/types';
 
-type Role = 'ADMIN' | 'TEAM_MEMBER';
-
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: Role;
-}
+type Status = 'loading' | 'authenticated' | 'anonymous';
 
 interface AuthContextType {
   user: User | null;
-  token: string | null;
+  status: Status;
+  /** Set when the last session ended because the token expired or was rejected. */
+  sessionExpired: boolean;
   login: (email: string, password: string) => Promise<User>;
-  register: (name: string, email: string, password: string, role?: Role) => Promise<User>;
+  register: (name: string, email: string, password: string) => Promise<User>;
   logout: () => void;
 }
 
@@ -22,55 +19,73 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [status, setStatus] = useState<Status>(() => (localStorage.getItem(TOKEN_KEY) ? 'loading' : 'anonymous'));
+  const [sessionExpired, setSessionExpired] = useState(false);
+
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(TOKEN_KEY);
+    setUser(null);
+    setStatus('anonymous');
+  }, []);
+
+  // Restore the session from a stored token so a page refresh doesn't log the user out.
+  useEffect(() => {
+    if (!localStorage.getItem(TOKEN_KEY)) return;
+    let cancelled = false;
+    authApi
+      .me()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setUser(data);
+        setStatus('authenticated');
+      })
+      .catch(() => {
+        if (!cancelled) clearSession();
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [clearSession]);
 
   useEffect(() => {
-    if (!token) return;
+    const onExpired = () => {
+      setSessionExpired(true);
+      clearSession();
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, [clearSession]);
 
-    axios.defaults.headers.common.Authorization = `Bearer ${token}`;
-    const interceptor = axios.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (error.response?.status === 401) {
-          setToken(null);
-          setUser(null);
-          localStorage.removeItem('token');
-          delete axios.defaults.headers.common.Authorization;
-          window.location.assign('/login');
-        }
-        return Promise.reject(error);
+  const startSession = useCallback((token: string, nextUser: User) => {
+    localStorage.setItem(TOKEN_KEY, token);
+    setUser(nextUser);
+    setStatus('authenticated');
+    setSessionExpired(false);
+    return nextUser;
+  }, []);
+
+  const value = useMemo<AuthContextType>(
+    () => ({
+      user,
+      status,
+      sessionExpired,
+      login: async (email, password) => {
+        const { data } = await authApi.login(email, password);
+        return startSession(data.token, data.user);
       },
-    );
+      register: async (name, email, password) => {
+        const { data } = await authApi.register(name, email, password);
+        return startSession(data.token, data.user);
+      },
+      logout: () => {
+        setSessionExpired(false);
+        clearSession();
+      },
+    }),
+    [user, status, sessionExpired, startSession, clearSession],
+  );
 
-    return () => axios.interceptors.response.eject(interceptor);
-  }, [token]);
-
-  const login = async (email: string, password: string) => {
-    const { data } = await axios.post('/auth/login', { email, password });
-    setToken(data.token);
-    setUser(data.user);
-    localStorage.setItem('token', data.token);
-    axios.defaults.headers.common.Authorization = `Bearer ${data.token}`;
-    return data.user;
-  };
-
-  const register = async (name: string, email: string, password: string, role?: Role) => {
-    const { data } = await axios.post('/auth/register', { name, email, password, role });
-    setToken(data.token);
-    setUser(data.user);
-    localStorage.setItem('token', data.token);
-    axios.defaults.headers.common.Authorization = `Bearer ${data.token}`;
-    return data.user;
-  };
-
-  const logout = () => {
-    setToken(null);
-    setUser(null);
-    localStorage.removeItem('token');
-    delete axios.defaults.headers.common.Authorization;
-  };
-
-  return <AuthContext.Provider value={{ user, token, login, register, logout }}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {
