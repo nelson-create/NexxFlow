@@ -1,12 +1,22 @@
 import { Router } from 'express';
-import { PrismaClient } from '@prisma/client';
-import { authenticate, authorize, AuthRequest } from '../middleware/auth';
+import { prisma } from '../lib/prisma.js';
+import { authenticate, authorize } from '../middleware/auth.js';
 
 const router = Router();
-const prisma = new PrismaClient();
 
-router.get('/', authenticate, authorize('ADMIN'), async (req: AuthRequest, res) => {
-  res.json(await prisma.user.findMany({ select: { id: true, name: true, email: true, role: true } }));
+router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const role = req.query.role === 'ADMIN' || req.query.role === 'TEAM_MEMBER' ? req.query.role : undefined;
+    res.json(
+      await prisma.user.findMany({
+        where: role ? { role } : undefined,
+        select: { id: true, name: true, email: true, role: true },
+        orderBy: { name: 'asc' },
+      }),
+    );
+  } catch (err) {
+    next(err);
+  }
 });
 
 export default router;

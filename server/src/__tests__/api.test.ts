@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { app, prisma } from '../index';
+import { app, prisma } from '../index.js';
 
 const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const adminEmail = `test-admin-${suffix}@example.com`;
@@ -140,5 +140,64 @@ describe('Nexxflow API requirements', () => {
       .send({ slug: `private-${privateEventId}`, pin: '482917' });
 
     expect(response.status).toBe(401);
+  });
+
+  it('restores the session from a token via /auth/me', async () => {
+    const me = await request(app).get('/api/auth/me').set('Authorization', `Bearer ${memberToken}`);
+    expect(me.status).toBe(200);
+    expect(me.body).toMatchObject({ id: memberId, email: memberEmail, role: 'TEAM_MEMBER' });
+
+    const anonymous = await request(app).get('/api/auth/me');
+    expect(anonymous.status).toBe(401);
+  });
+
+  it('returns 400 with a readable message for invalid input', async () => {
+    const response = await request(app).post('/api/auth/register').send({ name: 'X', email: 'nope', password: '1' });
+    expect(response.status).toBe(400);
+    expect(typeof response.body.message).toBe('string');
+  });
+
+  it('lets assigned members view an event but not delete photos they did not upload', async () => {
+    const detail = await request(app).get(`/api/events/${assignedEventId}`).set('Authorization', `Bearer ${memberToken}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body._count).toMatchObject({ photos: 2, selected: 1 });
+
+    const forbidden = await request(app).delete(`/api/photos/${unselectedPhotoId}`).set('Authorization', `Bearer ${memberToken}`);
+    expect(forbidden.status).toBe(403);
+  });
+
+  it('bulk-selects photos for an owned event', async () => {
+    const response = await request(app)
+      .patch('/api/photos/bulk')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ eventId: assignedEventId, ids: [unselectedPhotoId], selected: true });
+    expect(response.status).toBe(200);
+    expect(response.body.updated).toBe(1);
+
+    await request(app)
+      .patch('/api/photos/bulk')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ eventId: assignedEventId, ids: [unselectedPhotoId], selected: false });
+  });
+
+  it('keeps the gallery link stable on republish and blocks access after unpublishing', async () => {
+    const first = await request(app).get(`/api/galleries/by-event/${assignedEventId}`).set('Authorization', `Bearer ${adminToken}`);
+    await request(app).patch(`/api/events/${assignedEventId}`).set('Authorization', `Bearer ${adminToken}`).send({ name: 'Renamed event' });
+
+    const republish = await request(app)
+      .post('/api/galleries/publish')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ eventId: assignedEventId });
+    expect(republish.status).toBe(201);
+    expect(republish.body.slug).toBe(first.body.slug);
+
+    const unpublish = await request(app)
+      .post('/api/galleries/unpublish')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ eventId: assignedEventId });
+    expect(unpublish.status).toBe(200);
+
+    const verify = await request(app).post('/api/public-galleries/verify').send({ slug: first.body.slug, pin: '482917' });
+    expect(verify.status).toBe(401);
   });
 });

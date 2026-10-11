@@ -3,21 +3,22 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PrismaClient } from '@prisma/client';
-import authRoutes from './routes/auth';
-import eventRoutes from './routes/events';
-import photoRoutes from './routes/photos';
-import galleryRoutes from './routes/galleries';
-import publicGalleryRoutes from './routes/public-galleries';
-import usersRoutes from './routes/users';
-import { errorHandler } from './middleware/errorHandler';
+import { prisma } from './lib/prisma.js';
+import authRoutes from './routes/auth.js';
+import eventRoutes from './routes/events.js';
+import photoRoutes from './routes/photos.js';
+import galleryRoutes from './routes/galleries.js';
+import publicGalleryRoutes from './routes/public-galleries.js';
+import usersRoutes from './routes/users.js';
+import { errorHandler } from './middleware/errorHandler.js';
 
 const app = express();
-const prisma = new PrismaClient();
 const PORT = process.env.PORT || 4000;
 
+// Behind the nginx container / a reverse proxy, use X-Forwarded-For so rate limits are per client.
+app.set('trust proxy', 'loopback, linklocal, uniquelocal');
 app.use(cors({ origin: process.env.CLIENT_URL || 'http://localhost:5173', credentials: true }));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use('/uploads', express.static(process.env.UPLOAD_DIR || path.join(process.cwd(), 'uploads')));
 
 app.get('/health', (_, res) => res.json({ status: 'ok' }));
@@ -28,6 +29,7 @@ app.use('/api/photos', photoRoutes);
 app.use('/api/galleries', galleryRoutes);
 app.use('/api/public-galleries', publicGalleryRoutes);
 app.use('/api/users', usersRoutes);
+app.use('/api', (_req, res) => res.status(404).json({ message: 'Not found' }));
 
 app.use(errorHandler);
 

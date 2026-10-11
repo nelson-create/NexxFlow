@@ -1,0 +1,7 @@
+node_modules
+dist
+uploads
+.mongodb-rs
+.env
+.env.*
+!.env.example

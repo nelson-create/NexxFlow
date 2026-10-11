@@ -3,7 +3,8 @@ import axios, { AxiosError } from 'axios';
 export const TOKEN_KEY = 'token';
 export const SESSION_EXPIRED_EVENT = 'nexxflow:session-expired';
 
-const api = axios.create({ baseURL: '/api' });
+// Same-origin `/api` by default; set VITE_API_URL (e.g. https://api.example.com/api) when the API is hosted separately.
+const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || '/api' });
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);

@@ -2,7 +2,14 @@ services:
   db:
     image: mongo:7
     restart: always
-    command: ["mongod", "--bind_ip_all", "--replSet", "rs0"]
+    # A replica set (required by Prisma) with auth enabled needs a keyFile; generate one on first start.
+    entrypoint:
+      - bash
+      - -c
+      - |
+        if [ ! -f /data/db/mongo-keyfile ]; then head -c 756 /dev/urandom | base64 > /data/db/mongo-keyfile; fi
+        chmod 400 /data/db/mongo-keyfile && chown 999:999 /data/db/mongo-keyfile
+        exec docker-entrypoint.sh mongod --bind_ip_all --replSet rs0 --keyFile /data/db/mongo-keyfile
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in .env}
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}
@@ -12,24 +19,36 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval \"try { rs.status().ok } catch (e) { rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'db:27017'}]}).ok }\" | grep 1"]
       interval: 10s
-      timeout: 5s
+      # mongosh startup alone can take several seconds on small hosts.
+      timeout: 30s
       retries: 10
+      start_period: 30s
 
   server:
     build:
       context: ./server
       dockerfile: Dockerfile
     restart: always
-    ports:
-      - '4000:4000'
+    # Not published to the host: the client container proxies /api and /uploads over the internal network.
+    expose:
+      - '4000'
     environment:
       DATABASE_URL: mongodb://${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME in .env}:${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD in .env}@db:27017/nexxflow?authSource=admin&replicaSet=rs0
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
-      PORT: ${SERVER_PORT:-4000}
+      # Fixed: client/nginx.conf and the healthcheck below expect port 4000.
+      PORT: 4000
       CLIENT_URL: ${CLIENT_URL:-http://localhost:5173}
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-local}
       UPLOAD_DIR: /app/uploads
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_S3_ENDPOINT: ${AWS_S3_ENDPOINT:-}
     depends_on:
       db:
         condition: service_healthy
@@ -52,6 +71,26 @@ services:
       server:
         condition: service_healthy
 
+  # Optional HTTPS front door with automatic certificates.
+  # Enable with: docker compose --profile https up -d --build
+  caddy:
+    image: caddy:2
+    profiles: ['https']
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - client
+
 volumes:
   db_data:
   uploads_data:
+  caddy_data:
+  caddy_config:
